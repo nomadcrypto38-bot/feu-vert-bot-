@@ -1,6 +1,6 @@
 """
-FEU VERT BOT v4 — bougies Kraken (5 min, 15 min, H1, H4) + profil de volume.
-Alerte Telegram dès qu'un voyant passe au vert, commande /etat, et page tableau de bord.
+FEU VERT BOT v5 — bougies Kraken (5 min, 15 min, H1, H4) + profil de volume.
+Alerte Telegram dès qu'un voyant passe au vert, commande /etat, page avec voyants et jauges.
 Longs uniquement, scalping 1 à 3 %. Aide à la décision, pas une garantie.
 """
 import json
@@ -208,7 +208,11 @@ def analyse(rows):
                 target_pct, vp_target = pct, True
                 break
     green = final is not None and final >= GO_SCORE and up[last] and pick is not None
+    block = ""
+    if final is not None and final >= GO_SCORE and not green:
+        block = "tendance pas haussière" if not up[last] else "pas de cible fiable"
     return {
+        "block": block,
         "score": final, "up": up[last], "green": green,
         "entry": entry, "stop": entry * (1 - stop_pct), "stop_pct": stop_pct * 100,
         "target": entry * (1 + target_pct / 100) if pick else None,
@@ -284,7 +288,7 @@ def esc(t):
     return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def write_page(board):
+def write_page(board, prev_scores):
     stamp = now_paris().strftime("%d/%m à %H:%M")
     n_green = sum(1 for _, res, _ in board for r in res.values() if r["green"])
     cards = []
@@ -292,16 +296,26 @@ def write_page(board):
         price = next(iter(res.values()))["entry"]
         rows = []
         for tf, r in res.items():
+            sc = r["score"] if r["score"] is not None else 0
+            prev = prev_scores.get(f"{coin}|{tf}")
+            if prev is None or prev == sc:
+                delta = "<span class='d'>=</span>" if prev is not None else ""
+            else:
+                delta = f"<span class='d {'du' if sc > prev else 'dd'}'>{'▲' if sc > prev else '▼'} {sc - prev:+d}</span>"
+            gauge = (f"<div class='gauge'><div class='bar'><i style='width:{sc}%'></i><s></s></div>"
+                     f"<div class='pct'><b>{sc} %</b>{delta}</div></div>")
             if r["green"]:
                 prob = ("≥ " if r["vp_target"] else "") + f"{r['prob']:.0f} %"
                 detail = (f"<div class='plan'><span>Entrée <b>{fmt(r['entry'])}</b></span>"
                           f"<span class='t'>Cible <b>{fmt(r['target'])}</b> +{r['target_pct']:.1f} %</span>"
                           f"<span class='s'>Stop <b>{fmt(r['stop'])}</b> −{r['stop_pct']:.1f} %</span>"
                           f"<span>Proba <b>{prob}</b> · {r['cases']} cas</span></div>").replace(".", ",")
+            elif r.get("block"):
+                detail = f"<div class='why'>Seuil atteint mais {esc(r['block'])} · volume : {esc(r['vp_txt'])}</div>"
             else:
-                detail = f"<div class='why'>{esc(r['vp_txt'])}</div>"
+                detail = f"<div class='why'>Volume : {esc(r['vp_txt'])}</div>"
             rows.append(f"<div class='row {'go' if r['green'] else 'no'}'><div class='tf'>{tf}</div>"
-                        f"<div class='lamp'></div><div class='sc'>{r['score'] if r['score'] is not None else '—'}</div>{detail}</div>")
+                        f"<div class='lamp'></div>{gauge}{detail}</div>")
         ref = res.get("H1") or next(iter(res.values()))
         zone = f"Zone volume H1 : {fmt(ref['val'])} – {fmt(ref['vah'])} · POC {fmt(ref['poc'])}"
         cards.append(f"<section class='card'><header><h2>{coin}</h2><div class='px'>{fmt(price)} $</div></header>"
@@ -319,15 +333,20 @@ h1{{margin:0;font-size:1.5rem}} .meta{{color:var(--mu);font-size:.8rem;margin:2p
 .card{{background:var(--card);border:1px solid var(--li);border-radius:14px;padding:12px;margin-bottom:12px}}
 header{{display:flex;justify-content:space-between;align-items:baseline}} h2{{margin:0;font-size:1.3rem}} .px{{font-variant-numeric:tabular-nums}}
 .trend{{font-size:.8rem;margin:2px 0 8px}} .up{{color:var(--go)}} .down{{color:var(--st)}}
-.row{{display:grid;grid-template-columns:52px 16px 32px 1fr;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--li)}}
-.tf{{font-weight:600;font-size:.85rem}} .sc{{font-variant-numeric:tabular-nums;color:var(--mu);font-size:.85rem}}
+.row{{display:grid;grid-template-columns:52px 16px 1fr;gap:4px 8px;align-items:center;padding:8px 0;border-top:1px solid var(--li)}}
+.row .plan,.row .why{{grid-column:1/-1}}
+.gauge{{display:flex;align-items:center;gap:8px}} .bar{{position:relative;flex:1;height:8px;border-radius:4px;background:var(--li)}}
+.bar i{{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--mu)}} .go .bar i{{background:var(--go)}}
+.bar s{{position:absolute;left:70%;top:-4px;bottom:-4px;width:2px;background:var(--fg);opacity:.55}}
+.pct{{min-width:84px;text-align:right;font-size:.82rem;font-variant-numeric:tabular-nums}} .d{{margin-left:6px;color:var(--mu)}} .du{{color:var(--go)}} .dd{{color:var(--st)}}
+.tf{{font-weight:600;font-size:.85rem}}
 .lamp{{width:14px;height:14px;border-radius:50%}} .go .lamp{{background:var(--go);box-shadow:0 0 8px var(--go)}} .no .lamp{{background:var(--st)}}
 .go{{background:var(--gos);border-radius:8px;padding-left:6px}}
 .why{{color:var(--mu);font-size:.78rem}} .plan{{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:.8rem;font-variant-numeric:tabular-nums}}
 .plan .t b{{color:var(--go)}} .plan .s b{{color:var(--st)}} .zone{{font-size:.75rem;color:var(--mu);margin-top:6px}}
 .note{{color:var(--mu);font-size:.75rem}}
 </style></head><body>
-<h1>Feu Vert</h1><p class="meta">Mis à jour le {stamp} · {n_green} feu(x) vert(s) sur 16 · page rechargée chaque minute</p>
+<h1>Feu Vert</h1><p class="meta">Mis à jour le {stamp} · {n_green} feu(x) vert(s) sur 16 · trait vertical = seuil du feu vert (70 %) · flèches = évolution depuis la mise à jour précédente</p>
 {''.join(cards)}
 <p class="note">Bougies Kraken, longs uniquement. Proba = fréquence historique récente, pas une garantie. Vérifie toujours sur OKX avant d'entrer.</p>
 </body></html>"""
@@ -376,7 +395,8 @@ def main():
     if board:
         sig = json.dumps({c: {tf: r["green"] for tf, r in res.items()} for c, res, _ in board}, sort_keys=True)
         if sig != state.get("_sig") or time.time() - state.get("_page_ts", 0) >= 840:
-            write_page(board)
+            write_page(board, state.get("_page_scores", {}))
+            state["_page_scores"] = {f"{c}|{tf}": (r["score"] or 0) for c, res, _ in board for tf, r in res.items()}
             state["_sig"], state["_page_ts"] = sig, int(time.time())
 
     with open(STATE_FILE, "w") as f:
