@@ -1,0 +1,243 @@
+"""
+FEU VERT BOT — même logique que l'indicateur TradingView « Feu Vert Scalping » v3.
+Bougies Kraken (5 min, 15 min, H1, H4), alerte Telegram dès qu'un voyant passe au vert.
+Longs uniquement, scalping 1 à 3 %. Aide à la décision, pas une garantie.
+Aucune dépendance externe : Python 3.9+ standard.
+"""
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+COINS = {"BTC": "XBTUSD", "TAO": "TAOUSD", "ZEC": "ZECUSD", "SOL": "SOLUSD"}
+TIMEFRAMES = {"5 min": 5, "15 min": 15, "H1": 60, "H4": 240}
+GO_SCORE = 70
+MIN_PROB = 65.0
+HORIZON = 24
+MIN_STOP = 1.5
+MAX_STOP = 4.0
+TARGETS = [3.0, 2.5, 2.0, 1.5, 1.0]
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
+
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+FORCE_SUMMARY = os.environ.get("FORCE_SUMMARY", "") == "1"
+
+
+def get_json(url, tries=3):
+    for k in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "feu-vert-bot/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            if k == tries - 1:
+                raise
+            time.sleep(2 + 2 * k)
+
+
+def candles(pair, interval):
+    data = get_json(f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval={interval}")
+    if data.get("error"):
+        raise RuntimeError(", ".join(data["error"]))
+    key = next(k for k in data["result"] if k != "last")
+    rows = data["result"][key][:-1]  # dernière bougie pas encore clôturée
+    return [(int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[6])) for r in rows]
+
+
+def ema(a, n):
+    k = 2 / (n + 1)
+    out = [a[0]]
+    for v in a[1:]:
+        out.append(v * k + out[-1] * (1 - k))
+    return out
+
+
+def rma(a, n):
+    out = [None] * len(a)
+    if len(a) < n:
+        return out
+    s = sum(a[:n]) / n
+    out[n - 1] = s
+    for i in range(n, len(a)):
+        s = (s * (n - 1) + a[i]) / n
+        out[i] = s
+    return out
+
+
+def rsi(c, n=14):
+    up = [0.0] + [max(c[i] - c[i - 1], 0) for i in range(1, len(c))]
+    dn = [0.0] + [max(c[i - 1] - c[i], 0) for i in range(1, len(c))]
+    au, ad = rma(up, n), rma(dn, n)
+    return [None if au[i] is None else (100.0 if ad[i] == 0 else 100 - 100 / (1 + au[i] / ad[i])) for i in range(len(c))]
+
+
+def sma_opt(a, n):
+    out = [None] * len(a)
+    for i in range(len(a)):
+        w = a[max(0, i - n + 1): i + 1]
+        if len(w) == n and all(v is not None for v in w):
+            out[i] = sum(w) / n
+    return out
+
+
+def stoch_of(a, n=14):
+    out = [None] * len(a)
+    for i in range(len(a)):
+        w = a[max(0, i - n + 1): i + 1]
+        if len(w) == n and all(v is not None for v in w):
+            lo, hi = min(w), max(w)
+            out[i] = 50.0 if hi == lo else 100 * (a[i] - lo) / (hi - lo)
+    return out
+
+
+def vwma(c, v, n=50):
+    out = [None] * len(c)
+    for i in range(n - 1, len(c)):
+        sv = sum(v[i - n + 1: i + 1])
+        out[i] = sum(c[j] * v[j] for j in range(i - n + 1, i + 1)) / sv if sv > 0 else c[i]
+    return out
+
+
+def atr(h, l, c, n=14):
+    tr = [h[0] - l[0]] + [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, len(c))]
+    return rma(tr, n)
+
+
+def analyse(rows):
+    h = [r[2] for r in rows]; l = [r[3] for r in rows]
+    c = [r[4] for r in rows]; v = [r[5] for r in rows]
+    n = len(c)
+    e20, e50 = ema(c, 20), ema(c, 50)
+    r = rsi(c)
+    k = sma_opt(stoch_of(r), 3)
+    d = sma_opt(k, 3)
+    vw = vwma(c, v)
+    a = atr(h, l, c)
+
+    score, up, sp = [None] * n, [False] * n, [None] * n
+    for i in range(1, n):
+        if None in (r[i], r[i - 1], k[i], d[i], vw[i], a[i]):
+            continue
+        s = 0
+        s += 15 if c[i] > e50[i] else 0
+        s += 15 if e20[i] > e50[i] else 0
+        s += 20 if r[i] <= 50 else 10 if r[i] <= 60 else 0
+        s += 15 if k[i] < 25 else 10 if (k[i] > d[i] and k[i] < 50) else 0
+        s += 15 if c[i] <= vw[i] else 0
+        s += 10 if (r[i] > r[i - 1] and r[i] < 60) else 0
+        score[i] = round(s * 100 / 90)
+        up[i] = c[i] > e50[i] and e20[i] > e50[i]
+        sp[i] = max(MIN_STOP / 100, min(MAX_STOP / 100, 1.5 * a[i] / c[i]))
+
+    wins = [0] * len(TARGETS); nset = 0
+    for i in range(60, n - HORIZON):
+        if score[i] is None or not (score[i] >= 60 and up[i]):
+            continue
+        nset += 1
+        e, s0 = c[i], sp[i]
+        for j, t in enumerate(TARGETS):
+            for m in range(i + 1, i + HORIZON + 1):
+                if l[m] <= e * (1 - s0):
+                    break
+                if h[m] >= e * (1 + t / 100):
+                    wins[j] += 1
+                    break
+
+    last = n - 1
+    stop_pct = sp[last]
+    pick = None
+    for j, t in enumerate(TARGETS):
+        p = wins[j] / nset if nset else 0.0
+        ev = p * t - (1 - p) * stop_pct * 100
+        if p * 100 >= MIN_PROB and ev > 0:
+            pick = (t, p, ev)
+            break
+    entry = c[last]
+    green = score[last] is not None and score[last] >= GO_SCORE and up[last] and pick is not None
+    return {
+        "score": score[last], "up": up[last], "green": green,
+        "entry": entry, "stop": entry * (1 - stop_pct), "stop_pct": stop_pct * 100,
+        "target": entry * (1 + pick[0] / 100) if pick else None,
+        "target_pct": pick[0] if pick else None, "prob": pick[1] * 100 if pick else None,
+        "cases": nset,
+    }
+
+
+def fmt(x):
+    if x is None:
+        return "—"
+    d = 0 if x >= 1000 else 1 if x >= 100 else 2 if x >= 1 else 4
+    return f"{x:,.{d}f}".replace(",", " ").replace(".", ",")
+
+
+def send(text):
+    if not TOKEN or not CHAT_ID:
+        print("[telegram non configuré]\n" + text)
+        return
+    body = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text, "disable_web_page_preview": "true"}).encode()
+    try:
+        urllib.request.urlopen(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=body, timeout=20)
+    except Exception as e:
+        print(f"[échec Telegram] {e}")
+
+
+def line(tf, res, new):
+    pc = lambda x: f"{x:.1f}".replace(".", ",")
+    return (f"🟢 {tf}{' (nouveau)' if new else ''} : entrée {fmt(res['entry'])} · "
+            f"cible {fmt(res['target'])} (+{pc(res['target_pct'])} %) · "
+            f"stop {fmt(res['stop'])} (−{pc(res['stop_pct'])} %) · "
+            f"proba {res['prob']:.0f} % sur {res['cases']} cas")
+
+
+def main():
+    try:
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+    except Exception:
+        state = {}
+
+    summary, errors = [], []
+    for coin, pair in COINS.items():
+        results = {}
+        for tf, iv in TIMEFRAMES.items():
+            try:
+                results[tf] = analyse(candles(pair, iv))
+            except Exception as e:
+                errors.append(f"{coin} {tf} : {e}")
+            time.sleep(1.1)
+        if not results:
+            continue
+
+        prev = state.get(coin, {})
+        new = {tf: r["green"] and not prev.get(tf, False) for tf, r in results.items()}
+        greens = [tf for tf, r in results.items() if r["green"]]
+        h4_up = results.get("H4", {}).get("up", False)
+
+        if any(new.values()):
+            msg = f"FEU VERT {coin} · {len(greens)} unité(s) verte(s)"
+            if not h4_up:
+                msg += " · attention : tendance H4 pas haussière"
+            msg += "\n" + "\n".join(line(tf, results[tf], new[tf]) for tf in greens)
+            send(msg)
+            print(msg)
+
+        state[coin] = {tf: r["green"] for tf, r in results.items()}
+        lights = " ".join(f"{tf}:{'🟢' if r['green'] else '🔴'}{r['score']}" for tf, r in results.items())
+        summary.append(f"{coin}  {lights}  · H4 {'↑' if h4_up else '↓'}")
+
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=1, sort_keys=True)
+
+    report = "Feu Vert — état actuel\n" + "\n".join(summary)
+    if errors:
+        report += "\nErreurs : " + " | ".join(errors)
+    print(report)
+    if FORCE_SUMMARY:
+        send(report)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
