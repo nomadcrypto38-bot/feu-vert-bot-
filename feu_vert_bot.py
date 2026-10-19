@@ -1,7 +1,6 @@
 """
-FEU VERT BOT v4 — même logique que l'indicateur TradingView « Feu Vert Scalping » v4.
-Bougies Kraken (5 min, 15 min, H1, H4) + profil de volume, alerte Telegram dès qu'un
-voyant passe au vert. Commande /etat : état complet au passage suivant.
+FEU VERT BOT v4 — bougies Kraken (5 min, 15 min, H1, H4) + profil de volume.
+Alerte Telegram dès qu'un voyant passe au vert, commande /etat, et page tableau de bord.
 Longs uniquement, scalping 1 à 3 %. Aide à la décision, pas une garantie.
 """
 import json
@@ -20,7 +19,9 @@ MIN_STOP = 1.5
 MAX_STOP = 4.0
 TARGETS = [3.0, 2.5, 2.0, 1.5, 1.0]
 VP_LEN = 100
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.join(HERE, "state.json")
+PAGE_FILE = os.path.join(HERE, "index.html")
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -108,7 +109,6 @@ def atr(h, l, c, n=14):
 
 
 def volume_profile(rows, bins=24):
-    """POC (prix le plus échangé) + zone de valeur 70 % (VAL = bas, VAH = haut)."""
     hi = max(r[2] for r in rows); lo = min(r[3] for r in rows)
     if hi <= lo:
         return None
@@ -129,7 +129,6 @@ def volume_profile(rows, bins=24):
 
 
 def vp_bonus(price, poc, val, vah):
-    """Le profil de volume fait pencher la balance : bas de zone = +, haut de zone = −."""
     if price < val * 0.995:
         return -10, "sous la zone de valeur (cassure)"
     if price > vah:
@@ -238,7 +237,6 @@ def send(text):
 
 
 def check_commands(state):
-    """Lit les messages reçus depuis le dernier passage : /etat demande l'état complet."""
     if not TOKEN or not CHAT_ID:
         return False
     asked = False
@@ -272,6 +270,71 @@ def line(tf, res, new):
             f"     volume : {res['vp_txt']} · zone {fmt(res['val'])} – {fmt(res['vah'])} · POC {fmt(res['poc'])}")
 
 
+def now_paris():
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        return datetime.now(ZoneInfo("Europe/Paris"))
+    except Exception:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc)
+
+
+def esc(t):
+    return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def write_page(board):
+    stamp = now_paris().strftime("%d/%m à %H:%M")
+    n_green = sum(1 for _, res, _ in board for r in res.values() if r["green"])
+    cards = []
+    for coin, res, h4_up in board:
+        price = next(iter(res.values()))["entry"]
+        rows = []
+        for tf, r in res.items():
+            if r["green"]:
+                prob = ("≥ " if r["vp_target"] else "") + f"{r['prob']:.0f} %"
+                detail = (f"<div class='plan'><span>Entrée <b>{fmt(r['entry'])}</b></span>"
+                          f"<span class='t'>Cible <b>{fmt(r['target'])}</b> +{r['target_pct']:.1f} %</span>"
+                          f"<span class='s'>Stop <b>{fmt(r['stop'])}</b> −{r['stop_pct']:.1f} %</span>"
+                          f"<span>Proba <b>{prob}</b> · {r['cases']} cas</span></div>").replace(".", ",")
+            else:
+                detail = f"<div class='why'>{esc(r['vp_txt'])}</div>"
+            rows.append(f"<div class='row {'go' if r['green'] else 'no'}'><div class='tf'>{tf}</div>"
+                        f"<div class='lamp'></div><div class='sc'>{r['score'] if r['score'] is not None else '—'}</div>{detail}</div>")
+        ref = res.get("H1") or next(iter(res.values()))
+        zone = f"Zone volume H1 : {fmt(ref['val'])} – {fmt(ref['vah'])} · POC {fmt(ref['poc'])}"
+        cards.append(f"<section class='card'><header><h2>{coin}</h2><div class='px'>{fmt(price)} $</div></header>"
+                     f"<div class='trend {'up' if h4_up else 'down'}'>Tendance H4 {'↑ haussière' if h4_up else '↓ pas haussière'}</div>"
+                     f"{''.join(rows)}<div class='zone'>{zone}</div></section>")
+    html = f"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="refresh" content="60"><title>Feu Vert</title>
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Feu Vert">
+<style>
+:root{{--bg:#eef1f4;--card:#fff;--fg:#141a21;--mu:#5b6673;--li:#d9dfe6;--go:#14915d;--gos:#dff3ea;--st:#c8372d;--sts:#fbe4e1}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#0d1117;--card:#151b23;--fg:#e6ebf1;--mu:#8b97a5;--li:#262f3a;--go:#3fcf8e;--gos:#123224;--st:#f0675b;--sts:#3a1916}}}}
+body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,sans-serif;padding:max(14px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 30px max(14px,env(safe-area-inset-left))}}
+h1{{margin:0;font-size:1.5rem}} .meta{{color:var(--mu);font-size:.8rem;margin:2px 0 14px}}
+.card{{background:var(--card);border:1px solid var(--li);border-radius:14px;padding:12px;margin-bottom:12px}}
+header{{display:flex;justify-content:space-between;align-items:baseline}} h2{{margin:0;font-size:1.3rem}} .px{{font-variant-numeric:tabular-nums}}
+.trend{{font-size:.8rem;margin:2px 0 8px}} .up{{color:var(--go)}} .down{{color:var(--st)}}
+.row{{display:grid;grid-template-columns:52px 16px 32px 1fr;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--li)}}
+.tf{{font-weight:600;font-size:.85rem}} .sc{{font-variant-numeric:tabular-nums;color:var(--mu);font-size:.85rem}}
+.lamp{{width:14px;height:14px;border-radius:50%}} .go .lamp{{background:var(--go);box-shadow:0 0 8px var(--go)}} .no .lamp{{background:var(--st)}}
+.go{{background:var(--gos);border-radius:8px;padding-left:6px}}
+.why{{color:var(--mu);font-size:.78rem}} .plan{{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:.8rem;font-variant-numeric:tabular-nums}}
+.plan .t b{{color:var(--go)}} .plan .s b{{color:var(--st)}} .zone{{font-size:.75rem;color:var(--mu);margin-top:6px}}
+.note{{color:var(--mu);font-size:.75rem}}
+</style></head><body>
+<h1>Feu Vert</h1><p class="meta">Mis à jour le {stamp} · {n_green} feu(x) vert(s) sur 16 · page rechargée chaque minute</p>
+{''.join(cards)}
+<p class="note">Bougies Kraken, longs uniquement. Proba = fréquence historique récente, pas une garantie. Vérifie toujours sur OKX avant d'entrer.</p>
+</body></html>"""
+    with open(PAGE_FILE, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
 def main():
     try:
         with open(STATE_FILE) as f:
@@ -280,7 +343,7 @@ def main():
         state = {}
 
     asked = check_commands(state)
-    summary, errors = [], []
+    summary, errors, board = [], [], []
     for coin, pair in COINS.items():
         results = {}
         for tf, iv in TIMEFRAMES.items():
@@ -305,9 +368,16 @@ def main():
             send(msg)
             print(msg)
 
+        board.append((coin, results, h4_up))
         state[coin] = {tf: r["green"] for tf, r in results.items()}
         lights = " ".join(f"{tf}:{'🟢' if r['green'] else '🔴'}{r['score']}" for tf, r in results.items())
         summary.append(f"{coin}  {lights}  · H4 {'↑' if h4_up else '↓'}")
+
+    if board:
+        sig = json.dumps({c: {tf: r["green"] for tf, r in res.items()} for c, res, _ in board}, sort_keys=True)
+        if sig != state.get("_sig") or time.time() - state.get("_page_ts", 0) >= 840:
+            write_page(board)
+            state["_sig"], state["_page_ts"] = sig, int(time.time())
 
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=1, sort_keys=True)
