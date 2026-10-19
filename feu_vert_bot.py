@@ -1,7 +1,7 @@
 """
-FEU VERT BOT — même logique que l'indicateur TradingView « Feu Vert Scalping » v3.
-Bougies Kraken (5 min, 15 min, H1, H4), alerte Telegram dès qu'un voyant passe au vert.
-Commande /etat dans Telegram : état complet des 16 voyants au passage suivant.
+FEU VERT BOT v4 — même logique que l'indicateur TradingView « Feu Vert Scalping » v4.
+Bougies Kraken (5 min, 15 min, H1, H4) + profil de volume, alerte Telegram dès qu'un
+voyant passe au vert. Commande /etat : état complet au passage suivant.
 Longs uniquement, scalping 1 à 3 %. Aide à la décision, pas une garantie.
 """
 import json
@@ -19,6 +19,7 @@ HORIZON = 24
 MIN_STOP = 1.5
 MAX_STOP = 4.0
 TARGETS = [3.0, 2.5, 2.0, 1.5, 1.0]
+VP_LEN = 100
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
@@ -106,6 +107,42 @@ def atr(h, l, c, n=14):
     return rma(tr, n)
 
 
+def volume_profile(rows, bins=24):
+    """POC (prix le plus échangé) + zone de valeur 70 % (VAL = bas, VAH = haut)."""
+    hi = max(r[2] for r in rows); lo = min(r[3] for r in rows)
+    if hi <= lo:
+        return None
+    step = (hi - lo) / bins
+    vols = [0.0] * bins
+    for r in rows:
+        tp = (r[2] + r[3] + r[4]) / 3
+        vols[min(bins - 1, max(0, int((tp - lo) / step)))] += r[5]
+    p = vols.index(max(vols)); a = b = p; acc = vols[p]; total = sum(vols)
+    while acc < total * 0.7 and (a > 0 or b < bins - 1):
+        dn = vols[a - 1] if a > 0 else -1
+        upv = vols[b + 1] if b < bins - 1 else -1
+        if upv >= dn:
+            b += 1; acc += vols[b]
+        else:
+            a -= 1; acc += vols[a]
+    return lo + step * (p + 0.5), lo + step * a, lo + step * (b + 1)
+
+
+def vp_bonus(price, poc, val, vah):
+    """Le profil de volume fait pencher la balance : bas de zone = +, haut de zone = −."""
+    if price < val * 0.995:
+        return -10, "sous la zone de valeur (cassure)"
+    if price > vah:
+        return -15, "au-dessus de la zone de valeur"
+    if price >= vah - 0.15 * (vah - val):
+        return -10, "collé au haut de zone"
+    if price <= val + 0.25 * (poc - val):
+        return 15, "bas de zone de valeur"
+    if price <= poc:
+        return 8, "sous le POC"
+    return 0, "entre POC et haut de zone"
+
+
 def analyse(rows):
     h = [r[2] for r in rows]; l = [r[3] for r in rows]
     c = [r[4] for r in rows]; v = [r[5] for r in rows]
@@ -156,13 +193,29 @@ def analyse(rows):
             pick = (t, p, ev)
             break
     entry = c[last]
-    green = score[last] is not None and score[last] >= GO_SCORE and up[last] and pick is not None
+    poc = val = vah = None
+    bonus, vp_txt = 0, "profil indisponible"
+    vp = volume_profile(rows[-VP_LEN:])
+    if vp:
+        poc, val, vah = vp
+        bonus, vp_txt = vp_bonus(entry, poc, val, vah)
+    final = None if score[last] is None else max(0, min(100, score[last] + bonus))
+
+    target_pct, vp_target = (pick[0] if pick else None), False
+    if pick and vp:
+        for lvl in (poc, vah):
+            pct = (lvl * 0.999 / entry - 1) * 100
+            if 1.0 <= pct < target_pct:
+                target_pct, vp_target = pct, True
+                break
+    green = final is not None and final >= GO_SCORE and up[last] and pick is not None
     return {
-        "score": score[last], "up": up[last], "green": green,
+        "score": final, "up": up[last], "green": green,
         "entry": entry, "stop": entry * (1 - stop_pct), "stop_pct": stop_pct * 100,
-        "target": entry * (1 + pick[0] / 100) if pick else None,
-        "target_pct": pick[0] if pick else None, "prob": pick[1] * 100 if pick else None,
-        "cases": nset,
+        "target": entry * (1 + target_pct / 100) if pick else None,
+        "target_pct": target_pct, "prob": pick[1] * 100 if pick else None,
+        "vp_target": vp_target, "cases": nset,
+        "poc": poc, "val": val, "vah": vah, "vp_txt": vp_txt, "vp_bonus": bonus,
     }
 
 
@@ -210,10 +263,13 @@ def check_commands(state):
 
 def line(tf, res, new):
     pc = lambda x: f"{x:.1f}".replace(".", ",")
+    tgt_note = " (sur POC/haut de zone)" if res["vp_target"] else ""
+    prob = f"≥ {res['prob']:.0f}" if res["vp_target"] else f"{res['prob']:.0f}"
     return (f"🟢 {tf}{' (nouveau)' if new else ''} : entrée {fmt(res['entry'])} · "
-            f"cible {fmt(res['target'])} (+{pc(res['target_pct'])} %) · "
+            f"cible {fmt(res['target'])} (+{pc(res['target_pct'])} %){tgt_note} · "
             f"stop {fmt(res['stop'])} (−{pc(res['stop_pct'])} %) · "
-            f"proba {res['prob']:.0f} % sur {res['cases']} cas")
+            f"proba {prob} % sur {res['cases']} cas\n"
+            f"     volume : {res['vp_txt']} · zone {fmt(res['val'])} – {fmt(res['vah'])} · POC {fmt(res['poc'])}")
 
 
 def main():
