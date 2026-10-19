@@ -1,8 +1,8 @@
 """
 FEU VERT BOT — même logique que l'indicateur TradingView « Feu Vert Scalping » v3.
 Bougies Kraken (5 min, 15 min, H1, H4), alerte Telegram dès qu'un voyant passe au vert.
+Commande /etat dans Telegram : état complet des 16 voyants au passage suivant.
 Longs uniquement, scalping 1 à 3 %. Aide à la décision, pas une garantie.
-Aucune dépendance externe : Python 3.9+ standard.
 """
 import json
 import os
@@ -43,7 +43,7 @@ def candles(pair, interval):
     if data.get("error"):
         raise RuntimeError(", ".join(data["error"]))
     key = next(k for k in data["result"] if k != "last")
-    rows = data["result"][key][:-1]  # dernière bougie pas encore clôturée
+    rows = data["result"][key][:-1]
     return [(int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[6])) for r in rows]
 
 
@@ -184,6 +184,30 @@ def send(text):
         print(f"[échec Telegram] {e}")
 
 
+def check_commands(state):
+    """Lit les messages reçus depuis le dernier passage : /etat demande l'état complet."""
+    if not TOKEN or not CHAT_ID:
+        return False
+    asked = False
+    try:
+        if not state.get("_menu"):
+            cmds = json.dumps([{"command": "etat", "description": "État des 16 voyants (sous 5 min)"}])
+            urllib.request.urlopen(f"https://api.telegram.org/bot{TOKEN}/setMyCommands",
+                                   data=urllib.parse.urlencode({"commands": cmds}).encode(), timeout=20)
+            state["_menu"] = True
+        off = state.get("_offset", 0)
+        data = get_json(f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={off + 1}&timeout=0")
+        for u in data.get("result", []):
+            state["_offset"] = max(state.get("_offset", 0), u["update_id"])
+            m = u.get("message") or {}
+            txt = (m.get("text") or "").strip().lower()
+            if str(m.get("chat", {}).get("id")) == str(CHAT_ID) and txt.lstrip("/").startswith(("etat", "état")):
+                asked = True
+    except Exception as e:
+        print(f"[commandes Telegram] {e}")
+    return asked
+
+
 def line(tf, res, new):
     pc = lambda x: f"{x:.1f}".replace(".", ",")
     return (f"🟢 {tf}{' (nouveau)' if new else ''} : entrée {fmt(res['entry'])} · "
@@ -199,6 +223,7 @@ def main():
     except Exception:
         state = {}
 
+    asked = check_commands(state)
     summary, errors = [], []
     for coin, pair in COINS.items():
         results = {}
@@ -235,7 +260,7 @@ def main():
     if errors:
         report += "\nErreurs : " + " | ".join(errors)
     print(report)
-    if FORCE_SUMMARY:
+    if FORCE_SUMMARY or asked:
         send(report)
 
 
