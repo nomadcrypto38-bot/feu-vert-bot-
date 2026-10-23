@@ -21,28 +21,28 @@
   "15 min": false,
   "5 min": false,
   "H1": false,
-  "H4": true
+  "H4": false
  },
  "_menu": true,
  "_offset": 644754980,
  "_page_scores": {
-  "BTC|15 min": 67,
-  "BTC|5 min": 65,
-  "BTC|H1": 47,
-  "BTC|H4": 67,
-  "SOL|15 min": 57,
-  "SOL|5 min": 50,
+  "BTC|15 min": 35,
+  "BTC|5 min": 39,
+  "BTC|H1": 39,
+  "BTC|H4": 56,
+  "SOL|15 min": 52,
+  "SOL|5 min": 41,
   "SOL|H1": 28,
   "SOL|H4": 67,
-  "TAO|15 min": 40,
-  "TAO|5 min": 41,
-  "TAO|H1": 29,
-  "TAO|H4": 40,
-  "ZEC|15 min": 56,
-  "ZEC|5 min": 75,
-  "ZEC|H1": 28,
-  "ZEC|H4": 72
+  "TAO|15 min": 35,
+  "TAO|5 min": 39,
+  "TAO|H1": 65,
+  "TAO|H4": 76,
+  "ZEC|15 min": 52,
+  "ZEC|5 min": 46,
+  "ZEC|H1": 56,
+  "ZEC|H4": 62
  },
- "_page_ts": 1792768892,
- "_sig": "{\"BTC\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"SOL\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"TAO\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"ZEC\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": true}}"
+ "_page_ts": 1792771500,
+ "_sig": "{\"BTC\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"SOL\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"TAO\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"ZEC\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}}"
 }
