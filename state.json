@@ -28,21 +28,21 @@
  "_page_scores": {
   "BTC|15 min": 64,
   "BTC|5 min": 71,
-  "BTC|H1": 72,
+  "BTC|H1": 56,
   "BTC|H4": 29,
-  "SOL|15 min": 39,
-  "SOL|5 min": 75,
+  "SOL|15 min": 56,
+  "SOL|5 min": 71,
   "SOL|H1": 54,
   "SOL|H4": 47,
-  "TAO|15 min": 29,
-  "TAO|5 min": 50,
-  "TAO|H1": 54,
+  "TAO|15 min": 51,
+  "TAO|5 min": 65,
+  "TAO|H1": 71,
   "TAO|H4": 29,
   "ZEC|15 min": 83,
   "ZEC|5 min": 47,
   "ZEC|H1": 47,
   "ZEC|H4": 44
  },
- "_page_ts": 1793615205,
+ "_page_ts": 1793618667,
  "_sig": "{\"BTC\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"SOL\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"TAO\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}, \"ZEC\": {\"15 min\": false, \"5 min\": false, \"H1\": false, \"H4\": false}}"
 }
